@@ -1,11 +1,15 @@
-FROM nginx:alpine
+FROM jenkins/jenkins:lts
 
-# Remove the default nginx static assets
-RUN rm -rf /usr/share/nginx/html/*
+USER root
 
-# Copy all your site files into nginx html directory
-COPY . /usr/share/nginx/html
+# Install Docker CLI
+RUN apt-get update && \
+    apt-get install -y apt-transport-https ca-certificates curl gnupg2 lsb-release && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add - && \
+    echo "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y docker-ce-cli
 
-EXPOSE 80
+RUN usermod -aG docker jenkins
 
-CMD ["nginx", "-g", "daemon off;"]
+USER jenkins
