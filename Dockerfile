@@ -2,7 +2,7 @@ FROM jenkins/jenkins:lts
 
 USER root
 
-# Install dependencies and Docker CLI (modern Debian)
+# Install dependencies and Docker CLI (modern Debian, no groupadd needed)
 RUN apt-get update && \
     apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release && \
     mkdir -p /etc/apt/keyrings && \
@@ -11,7 +11,6 @@ RUN apt-get update && \
       | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
     apt-get update && \
     apt-get install -y docker-ce-cli && \
-    groupadd -for docker && \
     usermod -aG docker jenkins
 
 USER jenkins
