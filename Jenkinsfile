@@ -6,11 +6,6 @@ pipeline {
     }
 
     stages {
-        stage('Clone Repository') {
-            steps {
-                git url: 'https://github.com/AkashReddy123/argon-design-system.git'
-            }
-        }
         stage('Build Docker Image') {
             steps {
                 script {
