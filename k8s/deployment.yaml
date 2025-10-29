@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argon-frontend
+  labels:
+    app: argon-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: argon-frontend
+  template:
+    metadata:
+      labels:
+        app: argon-frontend
+    spec:
+      containers:
+        - name: argon-frontend
+          # Jenkins will replace __IMAGE_PLACEHOLDER__ with the built tag
+          image: __IMAGE_PLACEHOLDER__
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argon-frontend-svc
+spec:
+  selector:
+    app: argon-frontend
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+      nodePort: 30080
