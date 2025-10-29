@@ -16,7 +16,6 @@ spec:
     spec:
       containers:
         - name: argon-frontend
-          # Jenkins will replace __IMAGE_PLACEHOLDER__ with the built tag
           image: __IMAGE_PLACEHOLDER__
           imagePullPolicy: Always
           ports:
