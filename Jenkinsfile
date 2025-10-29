@@ -77,6 +77,9 @@ pipeline {
               mkdir -p \$WORKSPACE/.kube
               cp \$KCFG \$WORKSPACE/.kube/config
               chmod 600 \$WORKSPACE/.kube/config
+              sh "ls -lh k8s/"
+              sh "ls -lh k8s/deployment.yaml.ci"
+
 
               # apply manifest using kubectl container (no need for kubectl binary on Jenkins)
               docker run --rm \
