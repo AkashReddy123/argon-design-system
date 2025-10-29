@@ -3,7 +3,7 @@ FROM node:18-alpine AS builder
 WORKDIR /app
 
 # copy package manifest for caching (if exists)
-COPY package*.json . 2>/dev/null || true
+COPY package*.json ./
 RUN if [ -f package.json ]; then npm ci --silent; fi
 
 # copy project files
