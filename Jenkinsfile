@@ -62,32 +62,35 @@ pipeline {
     }
 
     stage('Deploy to Kubernetes') {
-      steps {
-        script {
-          if (!fileExists(env.K8S_MANIFEST)) {
-            error "K8S manifest not found at ${env.K8S_MANIFEST}"
-          }
-          def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          // Replace placeholder in a temp copy so original file stays
-          sh "cp ${env.K8S_MANIFEST} ${env.K8S_MANIFEST}.ci && sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${tag}|g' ${env.K8S_MANIFEST}.ci"
+  steps {
+    script {
+      if (!fileExists(env.K8S_MANIFEST)) {
+        error "K8S manifest not found at ${env.K8S_MANIFEST}"
+      }
+      def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+      // Replace placeholder in a temp copy so original file stays
+      sh "cp ${env.K8S_MANIFEST} ${env.K8S_MANIFEST}.ci"
+      sh "sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${tag}|g' ${env.K8S_MANIFEST}.ci"
 
-          // Use kubeconfig stored as Jenkins "Secret file" (id = KUBECONFIG_CRED)
-          withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
-            sh """
-              mkdir -p \$WORKSPACE/.kube
-              cp \$KCFG \$WORKSPACE/.kube/config
-              chmod 600 \$WORKSPACE/.kube/config
-              sh "ls -lh k8s/"
-              sh "ls -lh k8s/deployment.yaml.ci"
+      // Debug: List files and print manifest before deploy
+      sh 'ls -lh k8s/'
+      sh "cat ${env.K8S_MANIFEST}.ci"
 
+      withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
+        sh """
+          mkdir -p \$WORKSPACE/.kube
+          cp \$KCFG \$WORKSPACE/.kube/config
+          chmod 600 \$WORKSPACE/.kube/config
 
-              # apply manifest using kubectl container (no need for kubectl binary on Jenkins)
-              docker run --rm \
-                -v \$WORKSPACE:/workdir \
-                -v \$WORKSPACE/.kube:/root/.kube:ro \
-                bitnami/kubectl:latest apply -f /workdir/${env.K8S_MANIFEST}.ci
-            """
-          }
+          docker run --rm \
+            -v \$WORKSPACE:/workdir \
+            -v \$WORKSPACE/.kube:/root/.kube:ro \
+            bitnami/kubectl:latest apply -f /workdir/${env.K8S_MANIFEST}.ci
+        """
+      }
+    }
+  }
+}
 
           // Optional: show service summary
           sh "docker run --rm -v \$WORKSPACE/.kube:/root/.kube:ro bitnami/kubectl:latest -n default get svc || true"
