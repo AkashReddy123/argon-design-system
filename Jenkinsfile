@@ -2,9 +2,9 @@ pipeline {
   agent any
 
   environment {
-    IMAGE_NAME = "balaakashreddyy/new"   // <--- your chosen Docker repo
-    DOCKER_CRED = "docker-hub"          // Jenkins username/password credential ID
-    KUBECONFIG_CRED = "kubeconfig"      // Jenkins "Secret file" credential ID (upload your kubeconfig)
+    IMAGE_NAME = "balaakashreddyy/new"
+    DOCKER_CRED = "docker-hub"
+    KUBECONFIG_CRED = "kubeconfig"
     K8S_MANIFEST = "k8s/deployment.yaml"
     WORKDIR = "${env.WORKSPACE}"
   }
@@ -62,38 +62,36 @@ pipeline {
     }
 
     stage('Deploy to Kubernetes') {
-  steps {
-    script {
-      if (!fileExists(env.K8S_MANIFEST)) {
-        error "K8S manifest not found at ${env.K8S_MANIFEST}"
-      }
-      def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-      // Replace placeholder in a temp copy so original file stays
-      sh "cp ${env.K8S_MANIFEST} ${env.K8S_MANIFEST}.ci"
-      sh "sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${tag}|g' ${env.K8S_MANIFEST}.ci"
+      steps {
+        script {
+          if (!fileExists(env.K8S_MANIFEST)) {
+            error "K8S manifest not found at ${env.K8S_MANIFEST}"
+          }
+          def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          // Replace placeholder in a temp copy so original file stays
+          sh "cp ${env.K8S_MANIFEST} ${env.K8S_MANIFEST}.ci"
+          sh "sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${tag}|g' ${env.K8S_MANIFEST}.ci"
 
-      // Debug: List files and print manifest before deploy
-      sh 'ls -lh k8s/'
-      sh "cat ${env.K8S_MANIFEST}.ci"
+          // Debugging
+          sh 'ls -lh k8s/'
+          sh "cat ${env.K8S_MANIFEST}.ci"
 
-      withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
-        sh """
-          mkdir -p \$WORKSPACE/.kube
-          cp \$KCFG \$WORKSPACE/.kube/config
-          chmod 600 \$WORKSPACE/.kube/config
+          withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
+            sh """
+              mkdir -p \$WORKSPACE/.kube
+              cp \$KCFG \$WORKSPACE/.kube/config
+              chmod 600 \$WORKSPACE/.kube/config
 
-          docker run --rm \
-            -v \$WORKSPACE:/workdir \
-            -v \$WORKSPACE/.kube:/root/.kube:ro \
-            bitnami/kubectl:latest apply -f /workdir/${env.K8S_MANIFEST}.ci
-        """
-      }
-    }
-  }
-}
+              docker run --rm \
+                -v \$WORKSPACE:/workdir \
+                -v \$WORKSPACE/.kube:/root/.kube:ro \
+                bitnami/kubectl:latest apply -f /workdir/${env.K8S_MANIFEST}.ci
 
-          // Optional: show service summary
-          sh "docker run --rm -v \$WORKSPACE/.kube:/root/.kube:ro bitnami/kubectl:latest -n default get svc || true"
+              docker run --rm \
+                -v \$WORKSPACE/.kube:/root/.kube:ro \
+                bitnami/kubectl:latest -n default get svc || true
+            """
+          }
         }
       }
     }
@@ -107,7 +105,7 @@ pipeline {
       echo "FAILURE: check logs above."
     }
     always {
-      cleanWs() // cleanup workspace
+      cleanWs()
     }
   }
 }
