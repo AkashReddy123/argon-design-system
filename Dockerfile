@@ -31,7 +31,7 @@ RUN rm -rf /usr/share/nginx/html/*
 COPY --from=builder /output/ /usr/share/nginx/html/
 
 # keep a small health-check location (optional)
-COPY --chown=0:0 ./nginx-default.conf /etc/nginx/conf.d/default.conf 2>/dev/null || true
+
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
