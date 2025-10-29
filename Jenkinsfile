@@ -2,9 +2,17 @@ pipeline {
   agent any
 
   environment {
-    DOCKER_CRED = 'docker-hub'                      // Jenkins credential ID
-    IMAGE_NAME = "balaakashreddyy/argon-design-system"
-    K8S_MANIFEST = "deployment.yaml"
+    IMAGE_NAME = "balaakashreddyy/new"   // <--- your chosen Docker repo
+    DOCKER_CRED = "docker-hub"          // Jenkins username/password credential ID
+    KUBECONFIG_CRED = "kubeconfig"      // Jenkins "Secret file" credential ID (upload your kubeconfig)
+    K8S_MANIFEST = "k8s/deployment.yaml"
+    WORKDIR = "${env.WORKSPACE}"
+  }
+
+  options {
+    timeout(time: 30, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '10'))
+    ansiColor('xterm')
   }
 
   stages {
@@ -14,7 +22,7 @@ pipeline {
       }
     }
 
-    stage('Build (npm/gulp if present)') {
+    stage('Prepare / Build (optional)') {
       steps {
         script {
           if (fileExists('package.json')) {
@@ -22,11 +30,10 @@ pipeline {
             if (fileExists('gulpfile.js')) {
               sh 'npx gulp || true'
             } else {
-              // run npm build if exists
-              sh 'if npm run | grep -q \" build\"; then npm run build || true; fi'
+              sh 'if npm run | grep -q " build" ; then npm run build || true; fi'
             }
           } else {
-            echo 'No package.json — skipping build step.'
+            echo 'No package.json found — skipping Node/gulp build.'
           }
         }
       }
@@ -35,8 +42,8 @@ pipeline {
     stage('Docker Build') {
       steps {
         script {
-          GIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          sh "docker build -t ${IMAGE_NAME}:${GIT_SHORT} -t ${IMAGE_NAME}:latest ."
+          def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          sh "docker build -t ${IMAGE_NAME}:${tag} -t ${IMAGE_NAME}:latest ."
         }
       }
     }
@@ -46,9 +53,9 @@ pipeline {
         withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
           script {
-            GIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-            sh "docker push ${IMAGE_NAME}:${GIT_SHORT}"
-            sh "docker push ${IMAGE_NAME}:latest"
+            def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+            sh "docker push ${IMAGE_NAME}:${tag}"
+            sh "docker push ${IMAGE_NAME}:latest || true"
           }
         }
       }
@@ -58,31 +65,43 @@ pipeline {
       steps {
         script {
           if (!fileExists(env.K8S_MANIFEST)) {
-            error "Kubernetes manifest not found at ${env.K8S_MANIFEST}"
+            error "K8S manifest not found at ${env.K8S_MANIFEST}"
+          }
+          def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          // Replace placeholder in a temp copy so original file stays
+          sh "cp ${env.K8S_MANIFEST} ${env.K8S_MANIFEST}.ci && sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${tag}|g' ${env.K8S_MANIFEST}.ci"
+
+          // Use kubeconfig stored as Jenkins "Secret file" (id = KUBECONFIG_CRED)
+          withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
+            sh """
+              mkdir -p \$WORKSPACE/.kube
+              cp \$KCFG \$WORKSPACE/.kube/config
+              chmod 600 \$WORKSPACE/.kube/config
+
+              # apply manifest using kubectl container (no need for kubectl binary on Jenkins)
+              docker run --rm \
+                -v \$WORKSPACE:/workdir \
+                -v \$WORKSPACE/.kube:/root/.kube:ro \
+                bitnami/kubectl:latest apply -f /workdir/${env.K8S_MANIFEST}.ci
+            """
           }
 
-          // replace placeholder with image tag
-          GIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          sh "sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${GIT_SHORT}|g' ${env.K8S_MANIFEST} || true"
-
-          // run kubectl inside a container, using host kubeconfig mounted into Jenkins container at /root/.kube
-          sh """
-            docker run --rm \
-              -v /root/.kube:/root/.kube:ro \
-              -v \$(pwd):/workdir \
-              bitnami/kubectl:latest apply -f /workdir/${env.K8S_MANIFEST}
-          """
-
-          // show services
-          sh "docker run --rm -v /root/.kube:/root/.kube:ro bitnami/kubectl:latest -n default get svc"
+          // Optional: show service summary
+          sh "docker run --rm -v \$WORKSPACE/.kube:/root/.kube:ro bitnami/kubectl:latest -n default get svc || true"
         }
       }
     }
   } // stages
 
   post {
-    success { echo "Pipeline succeeded." }
-    failure { echo "Pipeline failed." }
-    always { echo "Pipeline finished." }
+    success {
+      echo "SUCCESS: ${IMAGE_NAME} built, pushed and deployed."
+    }
+    failure {
+      echo "FAILURE: check logs above."
+    }
+    always {
+      cleanWs() // cleanup workspace
+    }
   }
 }
