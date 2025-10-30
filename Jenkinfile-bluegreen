@@ -3,8 +3,8 @@ pipeline {
 
     environment {
         DOCKER_IMAGE = 'balaakashreddyy/argon-web'
-        KUBECONFIG_CREDENTIALS = 'kubeconfig'
         DOCKER_CREDENTIALS = 'dockerhub-credentials'
+        KUBECONFIG_CREDENTIALS = 'kubeconfig'
     }
 
     stages {
@@ -17,8 +17,10 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    def color = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'blue' : 'green'
-                    sh "docker build -t ${DOCKER_IMAGE}:${color} ."
+                    // Alternate between blue and green
+                    COLOR = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'blue' : 'green'
+                    echo "Building ${COLOR} version..."
+                    sh "docker build -t ${DOCKER_IMAGE}:${COLOR} ."
                 }
             }
         }
@@ -26,11 +28,12 @@ pipeline {
         stage('Push Docker Image') {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                    sh '''
-                        echo $PASS | docker login -u $USER --password-stdin
-                        docker push ${DOCKER_IMAGE}:blue || true
-                        docker push ${DOCKER_IMAGE}:green || true
-                    '''
+                    script {
+                        sh '''
+                            echo $PASS | docker login -u $USER --password-stdin
+                        '''
+                        sh "docker push ${DOCKER_IMAGE}:${COLOR}"
+                    }
                 }
             }
         }
@@ -39,14 +42,12 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: "${KUBECONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
                     script {
-                        def color = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'green' : 'blue'
+                        echo "Deploying ${COLOR} version to Kubernetes..."
                         sh """
-                            echo "Deploying ${color} version..."
-                            kubectl --insecure-skip-tls-verify=true set image deployment/argon-${color} argon-web=${DOCKER_IMAGE}:${color} --record || \
-                            kubectl --insecure-skip-tls-verify=true apply -f k8s/deployment-${color}.yaml
-                            kubectl --insecure-skip-tls-verify=true rollout status deployment/argon-${color}
-                            kubectl --insecure-skip-tls-verify=true patch service argon-bluegreen-service -p '{"spec":{"selector":{"app":"argon-web","version":"${color}"}}}'
-                            echo "✅ Traffic switched to ${color} version!"
+                            kubectl apply -f k8s/deployment-${COLOR}.yaml --validate=false --insecure-skip-tls-verify=true
+                            kubectl rollout status deployment/argon-${COLOR} --timeout=60s
+                            kubectl patch service argon-bluegreen-service -p '{"spec":{"selector":{"app":"argon-web","version":"${COLOR}"}}}'
+                            echo "✅ Traffic switched to ${COLOR} version!"
                         """
                     }
                 }
@@ -56,10 +57,10 @@ pipeline {
 
     post {
         success {
-            echo "Blue-Green deployment successful!"
+            echo "🎉 Blue-Green deployment successful!"
         }
         failure {
-            echo "Blue-Green deployment failed!"
+            echo "❌ Blue-Green deployment failed!"
         }
     }
 }
