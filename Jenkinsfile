@@ -34,9 +34,10 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                withCredentials([file(credentialsId: "${KUBE_CONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
                     sh '''
-                    kubectl apply -f k8s/ --validate=false
+                        echo "Deploying to Kubernetes..."
+                        kubectl apply -f k8s/ --validate=false --insecure-skip-tls-verify=true
                     '''
                 }
             }
