@@ -2,35 +2,46 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY = "docker.io/balaakashreddyy"
-        IMAGE_NAME = "argon-web"
-        COLOR = "green"   // change dynamically to blue/green as per next deployment
+        // Docker image repo (update if needed)
+        DOCKER_REPO = "balaakashreddyy/argon-web"
+        // Kubeconfig secret file ID in Jenkins
+        KUBECONFIG_CREDENTIAL_ID = 'kubeconfig'
     }
 
     stages {
-
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                git branch: 'main', url: 'https://github.com/AkashReddy123/argon-design-system.git'
+                echo "📦 Checking out source code..."
+                checkout scm
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "🏗️ Building ${COLOR} version..."
-                    sh "docker build -t ${REGISTRY}/${IMAGE_NAME}:${COLOR} ."
+                    // Generate a unique color tag for blue or green deployment
+                    def randomNum = new Random().nextInt(2)
+                    COLOR = randomNum == 0 ? "blue" : "green"
+                    IMAGE_TAG = "${DOCKER_REPO}:${COLOR}"
+
+                    echo "🚀 Building Docker image for ${COLOR} environment..."
+                    sh "docker build -t ${IMAGE_TAG} ."
                 }
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push to Docker Hub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                    script {
+                script {
+                    echo "🔑 Logging in and pushing image to Docker Hub..."
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub',  // Make sure this matches your Jenkins credential ID
+                        usernameVariable: 'USER',
+                        passwordVariable: 'PASS'
+                    )]) {
                         sh '''
-                            echo "$PASS" | docker login -u "$USER" --password-stdin
-                            docker push ${REGISTRY}/${IMAGE_NAME}:${COLOR}
+                            echo $PASS | docker login -u $USER --password-stdin
+                            docker push ${DOCKER_REPO}:${COLOR}
                         '''
                     }
                 }
@@ -39,32 +50,78 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
-                    script {
-                        echo "🚀 Deploying ${COLOR} version to Kubernetes..."
-                        // Export kubeconfig so kubectl can use it
+                script {
+                    echo "☸️ Deploying ${COLOR} version to Kubernetes..."
+
+                    withCredentials([file(credentialsId: "${KUBECONFIG_CREDENTIAL_ID}", variable: 'KUBECONFIG_FILE')]) {
                         sh '''
-                            export KUBECONFIG=${KUBECONFIG_FILE}
-                            kubectl config view
-                            kubectl apply -f k8s/deployment-${COLOR}.yaml
-                            kubectl apply -f k8s/service.yaml
+                            export KUBECONFIG=$KUBECONFIG_FILE
+
+                            # Create separate deployments for blue and green
+                            cat <<EOF | kubectl apply -f -
+                            apiVersion: apps/v1
+                            kind: Deployment
+                            metadata:
+                              name: argon-${COLOR}-deployment
+                            spec:
+                              replicas: 1
+                              selector:
+                                matchLabels:
+                                  app: argon-${COLOR}
+                              template:
+                                metadata:
+                                  labels:
+                                    app: argon-${COLOR}
+                                spec:
+                                  containers:
+                                  - name: argon-${COLOR}
+                                    image: ${DOCKER_REPO}:${COLOR}
+                                    ports:
+                                    - containerPort: 80
+                            EOF
+
+                            # Create or update service (points to currently active color)
+                            kubectl apply -f - <<EOF
+                            apiVersion: v1
+                            kind: Service
+                            metadata:
+                              name: argon-web-service
+                            spec:
+                              selector:
+                                app: argon-${COLOR}
+                              ports:
+                                - protocol: TCP
+                                  port: 80
+                                  targetPort: 80
+                            EOF
                         '''
                     }
                 }
             }
         }
 
-        stage('Switch Traffic') {
+        stage('Verification') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
-                    script {
-                        echo "🔁 Switching traffic to ${COLOR} version..."
-                        sh '''
-                            export KUBECONFIG=${KUBECONFIG_FILE}
-                            kubectl set image deployment/argon-${COLOR} argon-web=${REGISTRY}/${IMAGE_NAME}:${COLOR} --record
-                            kubectl rollout status deployment/argon-${COLOR}
-                        '''
-                    }
+                echo "🔍 Verifying deployment..."
+                sh '''
+                    kubectl get pods -l app=argon-${COLOR}
+                    kubectl get svc argon-web-service
+                '''
+            }
+        }
+
+        stage('Cleanup Old Version') {
+            steps {
+                script {
+                    echo "🧹 Cleaning up old deployments..."
+                    sh '''
+                        export KUBECONFIG=$KUBECONFIG_FILE
+                        if [ "${COLOR}" = "blue" ]; then
+                            kubectl delete deployment argon-green-deployment --ignore-not-found=true
+                        else
+                            kubectl delete deployment argon-blue-deployment --ignore-not-found=true
+                        fi
+                    '''
                 }
             }
         }
@@ -72,10 +129,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Blue-Green deployment successful!"
+            echo "✅ Blue-Green deployment completed successfully!"
         }
         failure {
-            echo "❌ Blue-Green deployment failed!"
+            echo "❌ Deployment failed. Check the Jenkins logs for details."
         }
     }
 }
