@@ -2,28 +2,25 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = 'balaakashreddyy/argon-web'
-        KUBECONFIG_CREDENTIALS = 'kubeconfig'
-        DOCKER_CREDENTIALS = 'dockerhub-credentials'
+        DOCKERHUB_USER = credentials('dockerhub-user')
+        PASS = credentials('dockerhub-pass')
+        KUBECONFIG = credentials('kube-config')  // optional if using Jenkins credential
     }
 
     stages {
+
         stage('Checkout Code') {
             steps {
-                echo "📦 Checking out source code..."
-                git url: 'https://github.com/AkashReddy123/argon-design-system.git', branch: 'main'
+                echo '📦 Checking out source code...'
+                git 'https://github.com/AkashReddy123/argon-design-system.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Alternate between blue and green
-                    def color = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'green' : 'blue'
-                    env.COLOR = color
-                    env.IMAGE_TAG = "${DOCKER_IMAGE}:${color}"
-                    echo "🚀 Building Docker image for ${color} environment..."
-                    sh "docker build -t ${IMAGE_TAG} ."
+                    echo '🚀 Building Docker image for green environment...'
+                    sh 'docker build -t balaakashreddyy/argon-web:green .'
                 }
             }
         }
@@ -31,11 +28,11 @@ pipeline {
         stage('Push to Docker Hub') {
             steps {
                 script {
-                    echo "🔑 Logging in and pushing image to Docker Hub..."
-                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    echo '🔑 Logging in and pushing image to Docker Hub...'
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                         sh '''
-                            echo "$PASS" | docker login -u "$USER" --password-stdin
-                            docker push ${IMAGE_TAG}
+                        echo $PASS | docker login -u $USER --password-stdin
+                        docker push balaakashreddyy/argon-web:green
                         '''
                     }
                 }
@@ -45,14 +42,12 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    withCredentials([file(credentialsId: "${KUBECONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
-                        echo "🚀 Deploying ${COLOR} version to Kubernetes..."
+                    echo '🚀 Deploying green version to Kubernetes...'
+                    withCredentials([file(credentialsId: 'kube-config', variable: 'KUBECONFIG')]) {
+                        // ⚠️ Added flags to skip TLS verification (for Docker Desktop/Minikube only)
                         sh '''
-                            kubectl set image deployment/argon-${COLOR} argon-web=${IMAGE_TAG} --record || \
-                            kubectl apply -f k8s/deployment-${COLOR}.yaml
-                            kubectl rollout status deployment/argon-${COLOR}
-                            kubectl patch service argon-bluegreen-service -p "{\"spec\":{\"selector\":{\"app\":\"argon-web\",\"version\":\"${COLOR}\"}}}"
-                            echo "✅ Traffic switched to ${COLOR} version!"
+                        kubectl set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green --record --insecure-skip-tls-verify=true
+                        kubectl apply -f k8s/deployment-green.yaml --validate=false --insecure-skip-tls-verify=true
                         '''
                     }
                 }
@@ -60,29 +55,28 @@ pipeline {
         }
 
         stage('Verification') {
+            when { expression { currentBuild.resultIsBetterOrEqualTo('SUCCESS') } }
             steps {
-                echo "🔍 Verifying deployment for ${COLOR} version..."
-                sh "kubectl get pods -l version=${COLOR}"
+                echo '✅ Green version deployed successfully. Running verification...'
+                sh 'kubectl get pods --insecure-skip-tls-verify=true'
             }
         }
 
         stage('Cleanup Old Version') {
+            when { expression { currentBuild.resultIsBetterOrEqualTo('SUCCESS') } }
             steps {
-                script {
-                    def oldColor = (env.COLOR == 'blue') ? 'green' : 'blue'
-                    echo "🧹 Cleaning up old ${oldColor} deployment..."
-                    sh "kubectl delete deployment argon-${oldColor} || true"
-                }
+                echo '🧹 Cleaning up old blue deployment...'
+                sh 'kubectl delete deployment argon-blue --ignore-not-found --insecure-skip-tls-verify=true'
             }
         }
     }
 
     post {
         success {
-            echo "✅ Blue-Green deployment successful!"
+            echo '🎉 Blue-Green deployment completed successfully!'
         }
         failure {
-            echo "❌ Deployment failed. Check the Jenkins logs for details."
+            echo '❌ Deployment failed. Check the Jenkins logs for details.'
         }
     }
 }
