@@ -1,16 +1,14 @@
-FROM node:18
+# Use Nginx to serve static content
+FROM nginx:alpine
 
-WORKDIR /app
+# Set working directory
+WORKDIR /usr/share/nginx/html
 
-# Copy package files and install dependencies
-COPY package*.json ./
-RUN npm install
-
-# Copy project files
+# Copy all website files into Nginx html folder
 COPY . .
 
-# Expose port
-EXPOSE 3000
+# Expose default HTTP port
+EXPOSE 80
 
-# Start the app
-CMD ["node", "server.js"]
+# Start Nginx
+CMD ["nginx", "-g", "daemon off;"]
