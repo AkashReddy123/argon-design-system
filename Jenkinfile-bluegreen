@@ -2,48 +2,53 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_REPO = "balaakashreddyy/argon-web"     // Your Docker Hub repo
-        DOCKER_CRED = "dockerhub-credentials"        // Jenkins credentials ID for Docker Hub
-        KUBECONFIG_CRED = "kubeconfig"               // Jenkins Secret file for kubeconfig.yaml
-        KUBECTL_IMAGE = "bitnami/kubectl:latest"     // Light kubectl image
+        IMAGE_REPO = "balaakashreddyy/argon-web"
+        DOCKER_CRED = "dockerhub-credentials"
+        KUBECONFIG_CRED = "kubeconfig"
+        KUBECTL_IMAGE = "bitnami/kubectl:latest"
         KUBECTL_TLS = "--insecure-skip-tls-verify=true"
     }
 
     options {
         timeout(time: 30, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '5'))
-        ansiColor('xterm')
     }
 
     stages {
         stage('Checkout Code') {
             steps {
-                echo '📦 Checking out source code...'
-                git branch: 'main', url: 'https://github.com/AkashReddy123/argon-design-system.git'
+                wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+                    echo '📦 Checking out source code...'
+                    git branch: 'main', url: 'https://github.com/AkashReddy123/argon-design-system.git'
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    env.IMAGE_TAG = "${IMAGE_REPO}:${tag}"
-                    echo "🐳 Building Docker image: ${env.IMAGE_TAG}"
-                    sh "docker build -t ${env.IMAGE_TAG} ."
+                wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+                    script {
+                        def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                        env.IMAGE_TAG = "${IMAGE_REPO}:${tag}"
+                        echo "🐳 Building Docker image: ${env.IMAGE_TAG}"
+                        sh "docker build -t ${env.IMAGE_TAG} ."
+                    }
                 }
             }
         }
 
         stage('Push to DockerHub') {
             steps {
-                script {
-                    echo '🚀 Logging in & pushing image to DockerHub...'
-                    withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                        sh """
-                            echo \$PASS | docker login -u \$USER --password-stdin
-                            docker push ${env.IMAGE_TAG}
-                            docker logout
-                        """
+                wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+                    script {
+                        echo '🚀 Logging in & pushing image to DockerHub...'
+                        withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                            sh """
+                                echo \$PASS | docker login -u \$USER --password-stdin
+                                docker push ${env.IMAGE_TAG}
+                                docker logout
+                            """
+                        }
                     }
                 }
             }
@@ -51,56 +56,54 @@ pipeline {
 
         stage('Blue-Green Deploy to Kubernetes') {
             steps {
-                script {
-                    // Access kubeconfig secret file
-                    withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
+                wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+                    script {
+                        withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
+                            def activeColor = sh(
+                                script: """
+                                    docker run --rm \
+                                        -v \$KCFG:/root/.kube/config:ro \
+                                        ${env.KUBECTL_IMAGE} \
+                                        kubectl ${env.KUBECTL_TLS} get svc argon-service -o=jsonpath='{.spec.selector.version}' || echo blue
+                                """,
+                                returnStdout: true
+                            ).trim()
 
-                        // Detect which version is active
-                        def activeColor = sh(
-                            script: """
+                            def newColor = (activeColor == "blue") ? "green" : "blue"
+                            def deployFile = "k8s/deployment-${newColor}.yaml"
+                            echo "☸️ Deploying ${newColor} version with image ${env.IMAGE_TAG}"
+
+                            sh "sed -i 's|__IMAGE_PLACEHOLDER__|${env.IMAGE_TAG}|g' ${deployFile}"
+
+                            // Deploy new version
+                            sh """
+                                docker run --rm \
+                                    -v \$PWD:/workdir \
+                                    -v \$KCFG:/root/.kube/config:ro \
+                                    ${env.KUBECTL_IMAGE} \
+                                    kubectl ${env.KUBECTL_TLS} apply -f /workdir/${deployFile}
+                            """
+
+                            // Switch service
+                            sh """
                                 docker run --rm \
                                     -v \$KCFG:/root/.kube/config:ro \
                                     ${env.KUBECTL_IMAGE} \
-                                    kubectl ${env.KUBECTL_TLS} get svc argon-service -o=jsonpath='{.spec.selector.version}' || echo blue
-                            """,
-                            returnStdout: true
-                        ).trim()
+                                    kubectl ${env.KUBECTL_TLS} patch svc argon-service \
+                                    -p '{"spec": {"selector": {"app": "argon-web", "version": "${newColor}"}}}'
+                            """
 
-                        def newColor = (activeColor == "blue") ? "green" : "blue"
-                        def deployFile = "k8s/deployment-${newColor}.yaml"
-                        echo "☸️ Deploying ${newColor} version with image ${env.IMAGE_TAG}"
+                            // Rollout check
+                            sh """
+                                docker run --rm \
+                                    -v \$KCFG:/root/.kube/config:ro \
+                                    ${env.KUBECTL_IMAGE} \
+                                    kubectl ${env.KUBECTL_TLS} rollout status deployment/argon-${newColor} --timeout=120s
+                            """
 
-                        // Replace image placeholder
-                        sh "sed -i 's|__IMAGE_PLACEHOLDER__|${env.IMAGE_TAG}|g' ${deployFile}"
-
-                        // Apply deployment
-                        sh """
-                            docker run --rm \
-                                -v \$PWD:/workdir \
-                                -v \$KCFG:/root/.kube/config:ro \
-                                ${env.KUBECTL_IMAGE} \
-                                kubectl ${env.KUBECTL_TLS} apply -f /workdir/${deployFile}
-                        """
-
-                        // Switch service to new version
-                        sh """
-                            docker run --rm \
-                                -v \$KCFG:/root/.kube/config:ro \
-                                ${env.KUBECTL_IMAGE} \
-                                kubectl ${env.KUBECTL_TLS} patch svc argon-service \
-                                -p '{"spec": {"selector": {"app": "argon-web", "version": "${newColor}"}}}'
-                        """
-
-                        // Rollout verification
-                        sh """
-                            docker run --rm \
-                                -v \$KCFG:/root/.kube/config:ro \
-                                ${env.KUBECTL_IMAGE} \
-                                kubectl ${env.KUBECTL_TLS} rollout status deployment/argon-${newColor} --timeout=120s
-                        """
-
-                        env.OLD_COLOR = activeColor
-                        env.NEW_COLOR = newColor
+                            env.OLD_COLOR = activeColor
+                            env.NEW_COLOR = newColor
+                        }
                     }
                 }
             }
@@ -108,51 +111,17 @@ pipeline {
 
         stage('Verification') {
             steps {
-                echo '🔍 Verifying new deployment...'
-                withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
-                    sh """
-                        docker run --rm \
-                            -v \$KCFG:/root/.kube/config:ro \
-                            ${env.KUBECTL_IMAGE} \
-                            kubectl ${env.KUBECTL_TLS} get pods -o wide
-                    """
-
-                    sh """
-                        docker run --rm \
-                            -v \$KCFG:/root/.kube/config:ro \
-                            ${env.KUBECTL_IMAGE} \
-                            kubectl ${env.KUBECTL_TLS} get svc argon-service -o yaml
-                    """
-                }
-            }
-        }
-
-        stage('Cleanup Old Version') {
-            when {
-                expression { return env.OLD_COLOR && (env.OLD_COLOR == "blue" || env.OLD_COLOR == "green") }
-            }
-            steps {
-                script {
-                    echo "🧹 Cleaning up old deployment: argon-${env.OLD_COLOR}"
+                wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm']) {
+                    echo '🔍 Verifying new deployment...'
                     withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
                         sh """
                             docker run --rm \
                                 -v \$KCFG:/root/.kube/config:ro \
                                 ${env.KUBECTL_IMAGE} \
-                                kubectl ${env.KUBECTL_TLS} delete deployment argon-${env.OLD_COLOR} --ignore-not-found
+                                kubectl ${env.KUBECTL_TLS} get pods -o wide
                         """
-                    }
-                }
-            }
-        }
-    }
 
-    post {
-        success {
-            echo '🎉 Blue-Green Deployment Successful!'
-        }
-        failure {
-            echo '❌ Deployment failed. Check Jenkins logs for details.'
-        }
-    }
-}
+                        sh """
+                            docker run --rm \
+                                -v \$KCFG:/root/.kube/config:ro \
+                                ${env.
