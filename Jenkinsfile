@@ -11,7 +11,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git 'https://github.com/AkashReddy123/argon-design-system.git'
+                git branch: 'main', url: 'https://github.com/AkashReddy123/argon-design-system.git'
             }
         }
 
