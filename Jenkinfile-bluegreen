@@ -2,37 +2,36 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = 'balaakashreddyy/argon-web'
-        DOCKER_CREDENTIALS = 'dockerhub-credentials'
-        KUBECONFIG_CREDENTIALS = 'kubeconfig'
+        REGISTRY = "docker.io/balaakashreddyy"
+        IMAGE_NAME = "argon-web"
+        COLOR = "green"   // change dynamically to blue/green as per next deployment
     }
 
     stages {
+
         stage('Checkout') {
             steps {
-                git url: 'https://github.com/AkashReddy123/argon-design-system.git', branch: 'main'
+                git branch: 'main', url: 'https://github.com/AkashReddy123/argon-design-system.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Alternate between blue and green
-                    COLOR = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'blue' : 'green'
-                    echo "Building ${COLOR} version..."
-                    sh "docker build -t ${DOCKER_IMAGE}:${COLOR} ."
+                    echo "🏗️ Building ${COLOR} version..."
+                    sh "docker build -t ${REGISTRY}/${IMAGE_NAME}:${COLOR} ."
                 }
             }
         }
 
         stage('Push Docker Image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                     script {
                         sh '''
-                            echo $PASS | docker login -u $USER --password-stdin
+                            echo "$PASS" | docker login -u "$USER" --password-stdin
+                            docker push ${REGISTRY}/${IMAGE_NAME}:${COLOR}
                         '''
-                        sh "docker push ${DOCKER_IMAGE}:${COLOR}"
                     }
                 }
             }
@@ -40,15 +39,31 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: "${KUBECONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
                     script {
-                        echo "Deploying ${COLOR} version to Kubernetes..."
-                        sh """
-                            kubectl apply -f k8s/deployment-${COLOR}.yaml --validate=false --insecure-skip-tls-verify=true
-                            kubectl rollout status deployment/argon-${COLOR} --timeout=60s
-                            kubectl patch service argon-bluegreen-service -p '{"spec":{"selector":{"app":"argon-web","version":"${COLOR}"}}}'
-                            echo "✅ Traffic switched to ${COLOR} version!"
-                        """
+                        echo "🚀 Deploying ${COLOR} version to Kubernetes..."
+                        // Export kubeconfig so kubectl can use it
+                        sh '''
+                            export KUBECONFIG=${KUBECONFIG_FILE}
+                            kubectl config view
+                            kubectl apply -f k8s/deployment-${COLOR}.yaml
+                            kubectl apply -f k8s/service.yaml
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Switch Traffic') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
+                    script {
+                        echo "🔁 Switching traffic to ${COLOR} version..."
+                        sh '''
+                            export KUBECONFIG=${KUBECONFIG_FILE}
+                            kubectl set image deployment/argon-${COLOR} argon-web=${REGISTRY}/${IMAGE_NAME}:${COLOR} --record
+                            kubectl rollout status deployment/argon-${COLOR}
+                        '''
                     }
                 }
             }
@@ -57,7 +72,7 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Blue-Green deployment successful!"
+            echo "✅ Blue-Green deployment successful!"
         }
         failure {
             echo "❌ Blue-Green deployment failed!"
