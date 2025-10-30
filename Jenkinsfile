@@ -6,7 +6,6 @@ pipeline {
     DOCKER_CRED = "docker-hub"
     KUBECONFIG_CRED = "kubeconfig"
     K8S_MANIFEST = "k8s/deployment.yaml"
-    WORKDIR = "${env.WORKSPACE}"
   }
 
   options {
@@ -16,6 +15,7 @@ pipeline {
   }
 
   stages {
+
     stage('Checkout') {
       steps {
         checkout scm
@@ -51,7 +51,9 @@ pipeline {
     stage('Docker Login & Push') {
       steps {
         withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-          sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+          sh '''
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+          '''
           script {
             def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
             sh "docker push ${IMAGE_NAME}:${tag}"
@@ -68,41 +70,36 @@ pipeline {
             error "K8S manifest not found at ${env.K8S_MANIFEST}"
           }
           def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          // Replace placeholder in a temp copy so original file stays
           sh "cp ${env.K8S_MANIFEST} ${env.K8S_MANIFEST}.ci"
           sh "sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${tag}|g' ${env.K8S_MANIFEST}.ci"
 
-          // Debugging
-          sh 'ls -lh k8s/'
-          sh "cat ${env.K8S_MANIFEST}.ci"
-
           withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
-            sh """
-              mkdir -p \$WORKSPACE/.kube
-              cp \$KCFG \$WORKSPACE/.kube/config
-              chmod 600 \$WORKSPACE/.kube/config
+            sh '''
+              mkdir -p $WORKSPACE/.kube
+              cp $KCFG $WORKSPACE/.kube/config
+              chmod 600 $WORKSPACE/.kube/config
 
               docker run --rm \
-                -v \$WORKSPACE:/workdir \
-                -v \$WORKSPACE/.kube:/root/.kube:ro \
-                bitnami/kubectl:latest apply -f /workdir/${env.K8S_MANIFEST}.ci
+                -v $WORKSPACE:/workdir \
+                -v $WORKSPACE/.kube:/root/.kube:ro \
+                bitnami/kubectl:1.29 apply -f /workdir/${K8S_MANIFEST}.ci
 
               docker run --rm \
-                -v \$WORKSPACE/.kube:/root/.kube:ro \
-                bitnami/kubectl:latest -n default get svc || true
-            """
+                -v $WORKSPACE/.kube:/root/.kube:ro \
+                bitnami/kubectl:1.29 -n default get pods
+            '''
           }
         }
       }
     }
-  } // stages
+  }
 
   post {
     success {
-      echo "SUCCESS: ${IMAGE_NAME} built, pushed and deployed."
+      echo "✅ SUCCESS: ${IMAGE_NAME} built, pushed, and deployed."
     }
     failure {
-      echo "FAILURE: check logs above."
+      echo "❌ FAILURE: Check logs above."
     }
     always {
       cleanWs()
