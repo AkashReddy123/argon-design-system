@@ -2,12 +2,12 @@ pipeline {
     agent any
 
     environment {
-        // Kubernetes config for deployment
+        IMAGE_REPO = "balaakashreddyy/argon-web"
+        DOCKER_CRED = "dockerhub-credentials"
         KUBECONFIG = credentials('kubeconfig')
     }
 
     stages {
-
         stage('Checkout Code') {
             steps {
                 echo '📦 Checking out source code...'
@@ -18,8 +18,10 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo '🐳 Building Docker image...'
-                    sh 'docker build -t balaakashreddyy/argon-web:green .'
+                    def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.IMAGE_TAG = "${IMAGE_REPO}:${tag}"
+                    echo "🐳 Building Docker image: ${env.IMAGE_TAG}"
+                    sh "docker build -t ${env.IMAGE_TAG} ."
                 }
             }
         }
@@ -28,42 +30,69 @@ pipeline {
             steps {
                 script {
                     echo '🚀 Logging in & pushing image to DockerHub...'
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                        sh '''
-                            echo $PASS | docker login -u $USER --password-stdin
-                            docker push balaakashreddyy/argon-web:green
-                        '''
+                    withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                        sh """
+                            echo \$PASS | docker login -u \$USER --password-stdin
+                            docker push ${env.IMAGE_TAG}
+                        """
                     }
                 }
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Blue-Green Deploy to Kubernetes') {
             steps {
-                echo '☸️ Deploying Green version to Kubernetes...'
-                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                    sh '''
-                        kubectl config view
-                        # Ignore TLS verification errors
-                        export KUBECTL_INSECURE_SKIP_TLS_VERIFY=true
-                        kubectl --insecure-skip-tls-verify=true set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green
-                        kubectl --insecure-skip-tls-verify=true apply -f k8s/deployment-green.yaml
-                    '''
+                script {
+                    def activeColor = sh(
+                        script: "kubectl --kubeconfig=\$KUBECONFIG get svc argon-service -o=jsonpath='{.spec.selector.version}' || echo blue",
+                        returnStdout: true
+                    ).trim()
+                    // default to blue if service or selector is missing
+                    def newColor = (activeColor == "blue") ? "green" : "blue"
+                    def deployFile = "k8s/deployment-${newColor}.yaml"
+
+                    echo "☸️ Deploying ${newColor} version with image ${env.IMAGE_TAG}"
+
+                    // Replace image placeholder in deployment YAML
+                    sh "sed -i 's|__IMAGE_PLACEHOLDER__|${env.IMAGE_TAG}|g' ${deployFile}"
+
+                    // Apply the new deployment (create or update)
+                    sh "kubectl --kubeconfig=\$KUBECONFIG apply -f ${deployFile}"
+
+                    // Flip the service to point to the new color
+                    sh """
+                        kubectl --kubeconfig=\$KUBECONFIG patch svc argon-service -p '{"spec": {"selector": {"app": "argon-web", "version": "${newColor}"}}}'
+                    """
+
+                    // Optional pause to allow rollout/switch
+                    sh "kubectl --kubeconfig=\$KUBECONFIG rollout status deployment/argon-${newColor} --timeout=120s"
+                    
+                    // Save to env for cleanup
+                    env.OLD_COLOR = activeColor
+                    env.NEW_COLOR = newColor
                 }
             }
         }
 
         stage('Verification') {
             steps {
-                echo '🔍 Verifying Green deployment...'
-                sh 'kubectl get pods --insecure-skip-tls-verify=true'
+                echo '🔍 Verifying new deployment...'
+                sh 'kubectl --kubeconfig=$KUBECONFIG get pods -o wide'
+                sh 'kubectl --kubeconfig=$KUBECONFIG get svc argon-service -o yaml'
             }
         }
 
         stage('Cleanup Old Version') {
+            when {
+                expression {
+                    return env.OLD_COLOR && (env.OLD_COLOR == "blue" || env.OLD_COLOR == "green")
+                }
+            }
             steps {
-                echo '🧹 Cleaning up Blue deployment...'
-                sh 'kubectl delete deployment argon-blue --ignore-not-found --insecure-skip-tls-verify=true'
+                script {
+                    echo "🧹 Cleaning up old deployment: argon-${env.OLD_COLOR}"
+                    sh "kubectl --kubeconfig=$KUBECONFIG delete deployment argon-${env.OLD_COLOR} --ignore-not-found"
+                }
             }
         }
     }
