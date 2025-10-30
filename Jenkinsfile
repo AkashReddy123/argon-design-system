@@ -10,21 +10,10 @@ pipeline {
         CONTAINER_NAME = 'argon-web'
     }
 
-    options {
-        skipDefaultCheckout() // Skip auto Git checkout
-    }
-
     stages {
-        stage('Use Existing Workspace') {
+        stage('Clone Repository') {
             steps {
-                echo "Using existing workspace without Git checkout"
-                sh 'ls -la'
-            }
-        }
-
-        stage('Install Dependencies') {
-            steps {
-                sh 'npm install'
+                git 'https://github.com/AkashReddy123/argon-design-system.git'
             }
         }
 
@@ -44,6 +33,9 @@ pipeline {
                                                       passwordVariable: 'DOCKER_PASS')]) {
                         sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
                         sh "docker push ${IMAGE_NAME}:${env.BUILD_NUMBER}"
+                        // Tag latest for convenience
+                        sh "docker tag ${IMAGE_NAME}:${env.BUILD_NUMBER} ${IMAGE_NAME}:latest"
+                        sh "docker push ${IMAGE_NAME}:latest"
                     }
                 }
             }
@@ -61,10 +53,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline completed successfully! Build #${env.BUILD_NUMBER}"
+            echo "✅ Website deployed successfully! Build #${env.BUILD_NUMBER}"
         }
         failure {
-            echo "❌ Pipeline failed. Check Jenkins logs for details."
+            echo "❌ Pipeline failed — check logs for errors."
         }
     }
 }
