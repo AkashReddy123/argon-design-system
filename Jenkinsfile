@@ -34,10 +34,9 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: "${KUBE_CONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
                     sh '''
-                    kubectl apply -f k8s/
-                    kubectl set image deployment/argon-web argon-web=${IMAGE_NAME}:${BUILD_NUMBER} -n ${K8S_NAMESPACE}
+                    kubectl apply -f k8s/ --validate=false
                     '''
                 }
             }
