@@ -42,9 +42,10 @@ pipeline {
                         def color = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'green' : 'blue'
                         sh """
                             echo "Deploying ${color} version..."
-                            kubectl set image deployment/argon-${color} argon-web=${DOCKER_IMAGE}:${color} --record || kubectl apply -f k8s/deployment-${color}.yaml
-                            kubectl rollout status deployment/argon-${color}
-                            kubectl patch service argon-bluegreen-service -p '{"spec":{"selector":{"app":"argon-web","version":"${color}"}}}'
+                            kubectl --insecure-skip-tls-verify=true set image deployment/argon-${color} argon-web=${DOCKER_IMAGE}:${color} --record || \
+                            kubectl --insecure-skip-tls-verify=true apply -f k8s/deployment-${color}.yaml
+                            kubectl --insecure-skip-tls-verify=true rollout status deployment/argon-${color}
+                            kubectl --insecure-skip-tls-verify=true patch service argon-bluegreen-service -p '{"spec":{"selector":{"app":"argon-web","version":"${color}"}}}'
                             echo "✅ Traffic switched to ${color} version!"
                         """
                     }
