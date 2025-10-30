@@ -45,8 +45,8 @@ pipeline {
                     withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
                         // TLS verification disabled for local/minikube clusters
                         sh '''
-                            kubectl set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green --record --insecure-skip-tls-verify=true || true
-                            kubectl apply -f k8s/deployment-green.yaml --validate=false --insecure-skip-tls-verify=true
+                            kubectl set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green 
+                            kubectl apply -f k8s/deployment-green.yaml --validate=false 
                         '''
                     }
                 }
