@@ -1,0 +1,64 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE = 'balaakashreddyy/argon-web'
+        KUBECONFIG_CREDENTIALS = 'kubeconfig'
+        DOCKER_CREDENTIALS = 'dockerhub-credentials'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git url: 'https://github.com/AkashReddy123/argon-design-system.git', branch: 'main'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def color = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'blue' : 'green'
+                    sh "docker build -t ${DOCKER_IMAGE}:${color} ."
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh '''
+                        echo $PASS | docker login -u $USER --password-stdin
+                        docker push ${DOCKER_IMAGE}:blue || true
+                        docker push ${DOCKER_IMAGE}:green || true
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                withCredentials([file(credentialsId: "${KUBECONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
+                    script {
+                        def color = (env.BUILD_NUMBER.toInteger() % 2 == 0) ? 'green' : 'blue'
+                        sh """
+                            echo "Deploying ${color} version..."
+                            kubectl set image deployment/argon-${color} argon-web=${DOCKER_IMAGE}:${color} --record || kubectl apply -f k8s/deployment-${color}.yaml
+                            kubectl rollout status deployment/argon-${color}
+                            kubectl patch service argon-bluegreen-service -p '{"spec":{"selector":{"app":"argon-web","version":"${color}"}}}'
+                            echo "✅ Traffic switched to ${color} version!"
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Blue-Green deployment successful!"
+        }
+        failure {
+            echo "Blue-Green deployment failed!"
+        }
+    }
+}
