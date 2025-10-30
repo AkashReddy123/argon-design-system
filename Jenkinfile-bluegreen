@@ -2,9 +2,8 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_USER = credentials('dockerhub-user')
-        PASS = credentials('dockerhub-pass')
-        KUBECONFIG = credentials('kube-config')  // optional if using Jenkins credential
+        // Kubernetes config for deployment
+        KUBECONFIG = credentials('kubeconfig')
     }
 
     stages {
@@ -19,20 +18,20 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo '🚀 Building Docker image for green environment...'
+                    echo '🐳 Building Docker image...'
                     sh 'docker build -t balaakashreddyy/argon-web:green .'
                 }
             }
         }
 
-        stage('Push to Docker Hub') {
+        stage('Push to DockerHub') {
             steps {
                 script {
-                    echo '🔑 Logging in and pushing image to Docker Hub...'
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    echo '🚀 Logging in & pushing image to DockerHub...'
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
                         sh '''
-                        echo $PASS | docker login -u $USER --password-stdin
-                        docker push balaakashreddyy/argon-web:green
+                            echo $PASS | docker login -u $USER --password-stdin
+                            docker push balaakashreddyy/argon-web:green
                         '''
                     }
                 }
@@ -42,12 +41,12 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    echo '🚀 Deploying green version to Kubernetes...'
-                    withCredentials([file(credentialsId: 'kube-config', variable: 'KUBECONFIG')]) {
-                        // ⚠️ Added flags to skip TLS verification (for Docker Desktop/Minikube only)
+                    echo '☸️ Deploying Green version to Kubernetes...'
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                        // TLS verification disabled for local/minikube clusters
                         sh '''
-                        kubectl set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green --record --insecure-skip-tls-verify=true
-                        kubectl apply -f k8s/deployment-green.yaml --validate=false --insecure-skip-tls-verify=true
+                            kubectl set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green --record --insecure-skip-tls-verify=true || true
+                            kubectl apply -f k8s/deployment-green.yaml --validate=false --insecure-skip-tls-verify=true
                         '''
                     }
                 }
@@ -55,17 +54,15 @@ pipeline {
         }
 
         stage('Verification') {
-            when { expression { currentBuild.resultIsBetterOrEqualTo('SUCCESS') } }
             steps {
-                echo '✅ Green version deployed successfully. Running verification...'
+                echo '🔍 Verifying Green deployment...'
                 sh 'kubectl get pods --insecure-skip-tls-verify=true'
             }
         }
 
         stage('Cleanup Old Version') {
-            when { expression { currentBuild.resultIsBetterOrEqualTo('SUCCESS') } }
             steps {
-                echo '🧹 Cleaning up old blue deployment...'
+                echo '🧹 Cleaning up Blue deployment...'
                 sh 'kubectl delete deployment argon-blue --ignore-not-found --insecure-skip-tls-verify=true'
             }
         }
@@ -73,10 +70,10 @@ pipeline {
 
     post {
         success {
-            echo '🎉 Blue-Green deployment completed successfully!'
+            echo '🎉 Blue-Green Deployment Successful!'
         }
         failure {
-            echo '❌ Deployment failed. Check the Jenkins logs for details.'
+            echo '❌ Deployment failed. Check Jenkins logs for details.'
         }
     }
 }
