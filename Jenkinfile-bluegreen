@@ -4,7 +4,7 @@ pipeline {
     environment {
         DOCKER_IMAGE = 'balaakashreddyy/argon-web'
         KUBECONFIG_CREDENTIALS = 'kubeconfig'
-        DOCKER_CREDENTIALS = 'dockerhub'
+        DOCKER_CREDENTIALS = 'dockerhub-credentials'
     }
 
     stages {
