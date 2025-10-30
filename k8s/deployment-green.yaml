@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argon-green
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: argon-web
+      version: green
+  template:
+    metadata:
+      labels:
+        app: argon-web
+        version: green
+    spec:
+      containers:
+      - name: argon-web
+        image: balaakashreddyy/argon-web:green
+        ports:
+        - containerPort: 80
