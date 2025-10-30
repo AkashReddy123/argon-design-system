@@ -2,11 +2,17 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_REPO = "balaakashreddyy/argon-web"
-        DOCKER_CRED = "dockerhub-credentials"
-        KUBECONFIG = credentials('kubeconfig')
-        // Always set this for kubectl security bypass
+        IMAGE_REPO = "balaakashreddyy/argon-web"     // Your Docker Hub repo
+        DOCKER_CRED = "dockerhub-credentials"        // Jenkins credentials ID for Docker Hub
+        KUBECONFIG_CRED = "kubeconfig"               // Jenkins Secret file for kubeconfig.yaml
+        KUBECTL_IMAGE = "bitnami/kubectl:latest"     // Light kubectl image
         KUBECTL_TLS = "--insecure-skip-tls-verify=true"
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+        ansiColor('xterm')
     }
 
     stages {
@@ -36,6 +42,7 @@ pipeline {
                         sh """
                             echo \$PASS | docker login -u \$USER --password-stdin
                             docker push ${env.IMAGE_TAG}
+                            docker logout
                         """
                     }
                 }
@@ -45,31 +52,56 @@ pipeline {
         stage('Blue-Green Deploy to Kubernetes') {
             steps {
                 script {
-                    def activeColor = sh(
-                        script: "kubectl --kubeconfig=\$KUBECONFIG \$KUBECTL_TLS get svc argon-service -o=jsonpath='{.spec.selector.version}' || echo blue",
-                        returnStdout: true
-                    ).trim()
-                    def newColor = (activeColor == "blue") ? "green" : "blue"
-                    def deployFile = "k8s/deployment-${newColor}.yaml"
+                    // Access kubeconfig secret file
+                    withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
 
-                    echo "☸️ Deploying ${newColor} version with image ${env.IMAGE_TAG}"
+                        // Detect which version is active
+                        def activeColor = sh(
+                            script: """
+                                docker run --rm \
+                                    -v \$KCFG:/root/.kube/config:ro \
+                                    ${env.KUBECTL_IMAGE} \
+                                    kubectl ${env.KUBECTL_TLS} get svc argon-service -o=jsonpath='{.spec.selector.version}' || echo blue
+                            """,
+                            returnStdout: true
+                        ).trim()
 
-                    // Replace image placeholder in deployment YAML
-                    sh "sed -i 's|__IMAGE_PLACEHOLDER__|${env.IMAGE_TAG}|g' ${deployFile}"
+                        def newColor = (activeColor == "blue") ? "green" : "blue"
+                        def deployFile = "k8s/deployment-${newColor}.yaml"
+                        echo "☸️ Deploying ${newColor} version with image ${env.IMAGE_TAG}"
 
-                    // Apply the new deployment
-                    sh "kubectl --kubeconfig=\$KUBECONFIG \$KUBECTL_TLS apply -f ${deployFile}"
+                        // Replace image placeholder
+                        sh "sed -i 's|__IMAGE_PLACEHOLDER__|${env.IMAGE_TAG}|g' ${deployFile}"
 
-                    // Flip the service to point to the new color
-                    sh """
-                        kubectl --kubeconfig=\$KUBECONFIG \$KUBECTL_TLS patch svc argon-service -p '{"spec": {"selector": {"app": "argon-web", "version": "${newColor}"}}}'
-                    """
+                        // Apply deployment
+                        sh """
+                            docker run --rm \
+                                -v \$PWD:/workdir \
+                                -v \$KCFG:/root/.kube/config:ro \
+                                ${env.KUBECTL_IMAGE} \
+                                kubectl ${env.KUBECTL_TLS} apply -f /workdir/${deployFile}
+                        """
 
-                    // Wait for rollout
-                    sh "kubectl --kubeconfig=\$KUBECONFIG \$KUBECTL_TLS rollout status deployment/argon-${newColor} --timeout=120s"
-                    
-                    env.OLD_COLOR = activeColor
-                    env.NEW_COLOR = newColor
+                        // Switch service to new version
+                        sh """
+                            docker run --rm \
+                                -v \$KCFG:/root/.kube/config:ro \
+                                ${env.KUBECTL_IMAGE} \
+                                kubectl ${env.KUBECTL_TLS} patch svc argon-service \
+                                -p '{"spec": {"selector": {"app": "argon-web", "version": "${newColor}"}}}'
+                        """
+
+                        // Rollout verification
+                        sh """
+                            docker run --rm \
+                                -v \$KCFG:/root/.kube/config:ro \
+                                ${env.KUBECTL_IMAGE} \
+                                kubectl ${env.KUBECTL_TLS} rollout status deployment/argon-${newColor} --timeout=120s
+                        """
+
+                        env.OLD_COLOR = activeColor
+                        env.NEW_COLOR = newColor
+                    }
                 }
             }
         }
@@ -77,21 +109,39 @@ pipeline {
         stage('Verification') {
             steps {
                 echo '🔍 Verifying new deployment...'
-                sh 'kubectl --kubeconfig=$KUBECONFIG $KUBECTL_TLS get pods -o wide'
-                sh 'kubectl --kubeconfig=$KUBECONFIG $KUBECTL_TLS get svc argon-service -o yaml'
+                withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
+                    sh """
+                        docker run --rm \
+                            -v \$KCFG:/root/.kube/config:ro \
+                            ${env.KUBECTL_IMAGE} \
+                            kubectl ${env.KUBECTL_TLS} get pods -o wide
+                    """
+
+                    sh """
+                        docker run --rm \
+                            -v \$KCFG:/root/.kube/config:ro \
+                            ${env.KUBECTL_IMAGE} \
+                            kubectl ${env.KUBECTL_TLS} get svc argon-service -o yaml
+                    """
+                }
             }
         }
 
         stage('Cleanup Old Version') {
             when {
-                expression {
-                    return env.OLD_COLOR && (env.OLD_COLOR == "blue" || env.OLD_COLOR == "green")
-                }
+                expression { return env.OLD_COLOR && (env.OLD_COLOR == "blue" || env.OLD_COLOR == "green") }
             }
             steps {
                 script {
                     echo "🧹 Cleaning up old deployment: argon-${env.OLD_COLOR}"
-                    sh "kubectl --kubeconfig=$KUBECONFIG $KUBECTL_TLS delete deployment argon-${env.OLD_COLOR} --ignore-not-found"
+                    withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
+                        sh """
+                            docker run --rm \
+                                -v \$KCFG:/root/.kube/config:ro \
+                                ${env.KUBECTL_IMAGE} \
+                                kubectl ${env.KUBECTL_TLS} delete deployment argon-${env.OLD_COLOR} --ignore-not-found
+                        """
+                    }
                 }
             }
         }
