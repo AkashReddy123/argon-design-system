@@ -14,6 +14,6 @@ spec:
     spec:
       containers:
       - name: argon-web
-        image: balaakashreddyy/argon-web:5
+        image: balaakashreddyy/argon-web:latest
         ports:
         - containerPort: 80
