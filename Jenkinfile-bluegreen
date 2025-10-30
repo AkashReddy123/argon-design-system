@@ -11,7 +11,7 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 echo '📦 Checking out source code...'
-                git branch: 'main',url: 'https://github.com/AkashReddy123/argon-design-system.git'
+                git branch: 'main', url: 'https://github.com/AkashReddy123/argon-design-system.git'
             }
         }
 
@@ -40,15 +40,15 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    echo '☸️ Deploying Green version to Kubernetes...'
-                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                        // TLS verification disabled for local/minikube clusters
-                        sh '''
-                            kubectl set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green 
-                            kubectl apply -f k8s/deployment-green.yaml --validate=false 
-                        '''
-                    }
+                echo '☸️ Deploying Green version to Kubernetes...'
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        kubectl config view
+                        # Ignore TLS verification errors
+                        export KUBECTL_INSECURE_SKIP_TLS_VERIFY=true
+                        kubectl --insecure-skip-tls-verify=true set image deployment/argon-green argon-web=balaakashreddyy/argon-web:green
+                        kubectl --insecure-skip-tls-verify=true apply -f k8s/deployment-green.yaml
+                    '''
                 }
             }
         }
