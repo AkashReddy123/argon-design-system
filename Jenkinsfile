@@ -6,12 +6,10 @@ pipeline {
         IMAGE_NAME = 'balaakashreddyy/argon-web'
         KUBE_CONFIG_CREDENTIALS = 'kubeconfig'
         K8S_NAMESPACE = 'default'
-        DEPLOYMENT_NAME = 'argon-web'
-        CONTAINER_NAME = 'argon-web'
     }
 
     stages {
-        stage('Clone Repository') {
+        stage('Checkout') {
             steps {
                 git 'https://github.com/AkashReddy123/argon-design-system.git'
             }
@@ -25,18 +23,11 @@ pipeline {
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push to DockerHub') {
             steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: "${DOCKER_HUB_CREDENTIALS}", 
-                                                      usernameVariable: 'DOCKER_USER', 
-                                                      passwordVariable: 'DOCKER_PASS')]) {
-                        sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
-                        sh "docker push ${IMAGE_NAME}:${env.BUILD_NUMBER}"
-                        // Tag latest for convenience
-                        sh "docker tag ${IMAGE_NAME}:${env.BUILD_NUMBER} ${IMAGE_NAME}:latest"
-                        sh "docker push ${IMAGE_NAME}:latest"
-                    }
+                withCredentials([usernamePassword(credentialsId: "${DOCKER_HUB_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh "echo $PASS | docker login -u $USER --password-stdin"
+                    sh "docker push ${IMAGE_NAME}:${env.BUILD_NUMBER}"
                 }
             }
         }
@@ -44,8 +35,10 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 withCredentials([file(credentialsId: "${KUBE_CONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
-                    sh "kubectl apply -f k8s/ -n ${K8S_NAMESPACE}"
-                    sh "kubectl set image deployment/${DEPLOYMENT_NAME} ${CONTAINER_NAME}=${IMAGE_NAME}:${env.BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                    sh '''
+                    kubectl apply -f k8s/
+                    kubectl set image deployment/argon-web argon-web=${IMAGE_NAME}:${BUILD_NUMBER} -n ${K8S_NAMESPACE}
+                    '''
                 }
             }
         }
@@ -53,10 +46,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Website deployed successfully! Build #${env.BUILD_NUMBER}"
+            echo '✅ Deployment successful!'
         }
         failure {
-            echo "❌ Pipeline failed — check logs for errors."
+            echo '❌ Pipeline failed!'
         }
     }
 }
