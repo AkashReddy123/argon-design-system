@@ -4,7 +4,6 @@ pipeline {
     environment {
         DOCKER_HUB_CREDENTIALS = 'dockerhub-credentials'
         IMAGE_NAME = 'balaakashreddyy/argon-web'
-        KUBE_CONFIG_CREDENTIALS = 'kubeconfig'
         K8S_NAMESPACE = 'default'
     }
 
@@ -18,7 +17,10 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    sh "docker build -t ${IMAGE_NAME}:${env.BUILD_NUMBER} ."
+                    sh '''
+                        echo "🔨 Building Docker image..."
+                        docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
+                    '''
                 }
             }
         }
@@ -26,18 +28,29 @@ pipeline {
         stage('Push to DockerHub') {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${DOCKER_HUB_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                    sh "echo $PASS | docker login -u $USER --password-stdin"
-                    sh "docker push ${IMAGE_NAME}:${env.BUILD_NUMBER}"
+                    sh '''
+                        echo "📦 Pushing image to DockerHub..."
+                        echo $PASS | docker login -u $USER --password-stdin
+                        docker push ${IMAGE_NAME}:${BUILD_NUMBER}
+                    '''
                 }
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: "${KUBE_CONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
+                script {
                     sh '''
-                        echo "Deploying to Kubernetes..."
+                        echo "🚀 Deploying to Kubernetes using mounted kubeconfig..."
+                        export KUBECONFIG=/root/.kube/config
+
+                        echo "🔍 Checking cluster access..."
+                        kubectl config get-contexts
+
+                        echo "📂 Applying Kubernetes manifests..."
                         kubectl apply -f k8s/ --validate=false --insecure-skip-tls-verify=true
+
+                        echo "✅ Deployment completed successfully!"
                     '''
                 }
             }
