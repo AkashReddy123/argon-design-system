@@ -35,7 +35,7 @@ pipeline {
                 script {
                     echo "🔑 Logging in and pushing image to Docker Hub..."
                     withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub',  // Make sure this matches your Jenkins credential ID
+                        credentialsId: 'dockerhub-credentials',  // Make sure this matches your Jenkins credential ID
                         usernameVariable: 'USER',
                         passwordVariable: 'PASS'
                     )]) {
