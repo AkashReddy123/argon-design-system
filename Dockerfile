@@ -1,12 +1,16 @@
-# ---------- Stage 1: prepare ----------
-FROM alpine AS prepare
-WORKDIR /site
+FROM node:18
+
+WORKDIR /app
+
+# Copy package files and install dependencies
+COPY package*.json ./
+RUN npm install
+
+# Copy project files
 COPY . .
 
-# ---------- Stage 2: runtime ----------
-FROM nginx:alpine
-LABEL maintainer="balaakashreddyy"
-RUN rm -rf /usr/share/nginx/html/*
-COPY --from=prepare /site/ /usr/share/nginx/html/
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+# Expose port
+EXPOSE 3000
+
+# Start the app
+CMD ["node", "server.js"]
