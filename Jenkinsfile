@@ -1,108 +1,70 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    IMAGE_NAME = "balaakashreddyy/new"
-    DOCKER_CRED = "docker-hub"
-    KUBECONFIG_CRED = "kubeconfig"
-    K8S_MANIFEST = "k8s/deployment.yaml"
-  }
-
-  options {
-    timeout(time: 30, unit: 'MINUTES')
-    buildDiscarder(logRotator(numToKeepStr: '10'))
-    ansiColor('xterm')
-  }
-
-  stages {
-
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
+    environment {
+        DOCKER_HUB_CREDENTIALS = 'dockerhub-credentials'
+        IMAGE_NAME = 'balaakashreddyy/argon-web'
+        KUBE_CONFIG_CREDENTIALS = 'kubeconfig'
+        K8S_NAMESPACE = 'default'
+        DEPLOYMENT_NAME = 'argon-web'
+        CONTAINER_NAME = 'argon-web'
     }
 
-    stage('Prepare / Build (optional)') {
-      steps {
-        script {
-          if (fileExists('package.json')) {
-            sh 'npm ci || true'
-            if (fileExists('gulpfile.js')) {
-              sh 'npx gulp || true'
-            } else {
-              sh 'if npm run | grep -q " build" ; then npm run build || true; fi'
+    options {
+        skipDefaultCheckout() // Skip auto Git checkout
+    }
+
+    stages {
+        stage('Use Existing Workspace') {
+            steps {
+                echo "Using existing workspace without Git checkout"
+                sh 'ls -la'
             }
-          } else {
-            echo 'No package.json found — skipping Node/gulp build.'
-          }
         }
-      }
-    }
 
-    stage('Docker Build') {
-      steps {
-        script {
-          def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          sh "docker build -t ${IMAGE_NAME}:${tag} -t ${IMAGE_NAME}:latest ."
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
+            }
         }
-      }
-    }
 
-    stage('Docker Login & Push') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-          sh '''
-            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-          '''
-          script {
-            def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-            sh "docker push ${IMAGE_NAME}:${tag}"
-            sh "docker push ${IMAGE_NAME}:latest || true"
-          }
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    sh "docker build -t ${IMAGE_NAME}:${env.BUILD_NUMBER} ."
+                }
+            }
         }
-      }
-    }
 
-    stage('Deploy to Kubernetes') {
-      steps {
-        script {
-          if (!fileExists(env.K8S_MANIFEST)) {
-            error "K8S manifest not found at ${env.K8S_MANIFEST}"
-          }
-          def tag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          sh "cp ${env.K8S_MANIFEST} ${env.K8S_MANIFEST}.ci"
-          sh "sed -i 's|__IMAGE_PLACEHOLDER__|${IMAGE_NAME}:${tag}|g' ${env.K8S_MANIFEST}.ci"
-
-          withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KCFG')]) {
-            sh '''
-              mkdir -p $WORKSPACE/.kube
-              cp $KCFG $WORKSPACE/.kube/config
-              chmod 600 $WORKSPACE/.kube/config
-
-              docker run --rm \
-                -v $WORKSPACE:/workdir \
-                -v $WORKSPACE/.kube:/root/.kube:ro \
-                bitnami/kubectl:1.29 apply -f /workdir/${K8S_MANIFEST}.ci
-
-              docker run --rm \
-                -v $WORKSPACE/.kube:/root/.kube:ro \
-                bitnami/kubectl:1.29 -n default get pods
-            '''
-          }
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_HUB_CREDENTIALS}", 
+                                                      usernameVariable: 'DOCKER_USER', 
+                                                      passwordVariable: 'DOCKER_PASS')]) {
+                        sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
+                        sh "docker push ${IMAGE_NAME}:${env.BUILD_NUMBER}"
+                    }
+                }
+            }
         }
-      }
-    }
-  }
 
-  post {
-    success {
-      echo "✅ SUCCESS: ${IMAGE_NAME} built, pushed, and deployed."
+        stage('Deploy to Kubernetes') {
+            steps {
+                withCredentials([file(credentialsId: "${KUBE_CONFIG_CREDENTIALS}", variable: 'KUBECONFIG')]) {
+                    sh "kubectl apply -f k8s/ -n ${K8S_NAMESPACE}"
+                    sh "kubectl set image deployment/${DEPLOYMENT_NAME} ${CONTAINER_NAME}=${IMAGE_NAME}:${env.BUILD_NUMBER} -n ${K8S_NAMESPACE}"
+                }
+            }
+        }
     }
-    failure {
-      echo "❌ FAILURE: Check logs above."
+
+    post {
+        success {
+            echo "✅ Pipeline completed successfully! Build #${env.BUILD_NUMBER}"
+        }
+        failure {
+            echo "❌ Pipeline failed. Check Jenkins logs for details."
+        }
     }
-    always {
-      cleanWs()
-    }
-  }
 }
