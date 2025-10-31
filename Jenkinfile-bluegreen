@@ -1,146 +1,106 @@
-// Jenkinsfile - Blue/Green Pipeline (Declarative)
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    IMAGE_REPO = "balaakashreddyy/argon-web"           // change to your repo
-    DOCKER_CRED = "dockerhub-credentials"             // Jenkins username/password credential id
-    KUBECONFIG_CRED = "kubeconfig-file"               // Jenkins "Secret file" credential id (kubeconfig)
-    K8S_SERVICE = "argon-service"
-    NAMESPACE = "default"
-    DEPLOY_PREFIX = "argon"                           // will use argon-blue / argon-green
-    // Safety: maximum seconds to wait for rollout
-    ROLLOUT_TIMEOUT = 180
-  }
-
-  options {
-    timeout(time: 30, unit: 'MINUTES')
-    ansiColor('xterm')
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
-        script { echo "Checking out code..." }
-        checkout scm
-      }
+    environment {
+        REGISTRY = "balaakashreddyy"
+        IMAGE_NAME = "argon-web"
+        BLUE_DEPLOYMENT = "deployment-blue"
+        GREEN_DEPLOYMENT = "deployment-green"
+        SERVICE_NAME = "argon-service"
     }
 
-    stage('Build Image') {
-      steps {
-        script {
-          def gitShort = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-          env.IMAGE_TAG = "${IMAGE_REPO}:${gitShort}"
-          echo "Building ${env.IMAGE_TAG}"
-          // Build: Jenkins must have docker access (see README below)
-          sh "docker build -t ${env.IMAGE_TAG} ."
-        }
-      }
+    options {
+        timestamps()
     }
 
-    stage('Push Image') {
-      steps {
-        script {
-          withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-            sh '''
-              echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-              docker push ${IMAGE_TAG}
-              docker logout
-            '''
-          }
-        }
-      }
-    }
-
-    stage('Blue-Green Deploy') {
-      steps {
-        script {
-          // read kubeconfig file credential
-          withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KUBECONFIG_FILE')]) {
-            env.KUBECONFIG = "${KUBECONFIG_FILE}"
-
-            // determine active color; default to 'blue' if no service
-            def active = sh(script: "kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} get svc ${env.K8S_SERVICE} -o=jsonpath='{.spec.selector.version}' 2>/dev/null || echo blue", returnStdout: true).trim()
-            if (!active) { active = "blue" }
-            def target = (active == 'blue') ? 'green' : 'blue'
-            echo "Active: ${active} -> Deploying target: ${target}"
-            env.OLD_COLOR = active
-            env.NEW_COLOR = target
-
-            def tpl = "k8s/deployment-${target}.yaml"
-            // 1) Preferred: envsubst substitution to produce temporary manifest
-            sh """
-              set -e
-              export IMAGE_TAG='${env.IMAGE_TAG}'
-              if command -v envsubst >/dev/null 2>&1; then
-                echo "Using envsubst to render ${tpl} -> /tmp/deploy-${target}.yaml"
-                envsubst < ${tpl} > /tmp/deploy-${target}.yaml
-                kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} apply -f /tmp/deploy-${target}.yaml
-              else
-                echo "envsubst not found. Applying template directly then setting image..."
-                kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} apply -f ${tpl}
-                kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} set image deployment/${DEPLOY_PREFIX}-${target} argon-web=${env.IMAGE_TAG}
-              fi
-            """
-
-            // 2) Wait for rollout
-            try {
-              sh "kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} rollout status deployment/${DEPLOY_PREFIX}-${target} --timeout=${env.ROLLOUT_TIMEOUT}s"
-            } catch (err) {
-              echo "Rollout failed for ${target}: ${err}"
-              // Attempt rollback: patch service back to old and stop pipeline
-              echo "Rolling back service to ${env.OLD_COLOR}"
-              sh "kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} patch svc ${env.K8S_SERVICE} -p '{\"spec\":{\"selector\":{\"app\":\"argon-web\",\"version\":\"${env.OLD_COLOR}\"}}}' || true"
-              error "Rollout failed - aborting (service restored to ${env.OLD_COLOR})"
+    stages {
+        stage('Preparation') {
+            steps {
+                ansiColor('xterm') {
+                    echo "✅ Starting Blue-Green Deployment Pipeline"
+                }
+                checkout scm
             }
-
-            // 3) Verify readiness via endpoints
-            // wait until endpoints show the target pod IP
-            sh """
-              for i in 1 2 3 4 5; do
-                echo 'Endpoints:'
-                kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} get endpoints ${env.K8S_SERVICE} -o wide || true
-                sleep 2
-              done
-            """
-
-            // 4) Switch service selector to new color (atomic patch)
-            sh "kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} patch svc ${env.K8S_SERVICE} -p '{\"spec\":{\"selector\":{\"app\":\"argon-web\",\"version\":\"${env.NEW_COLOR}\"}}}'"
-
-            // 5) Verify top-level health
-            echo "Verifying traffic switched to ${env.NEW_COLOR}..."
-            sh "kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} get svc ${env.K8S_SERVICE} -o yaml"
-            sh "kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} get pods -l app=argon-web -o wide"
-          } // end withCredentials
-        } // end script
-      } // end steps
-    } // end stage
-
-    stage('Verify & Cleanup') {
-      steps {
-        script {
-          withCredentials([file(credentialsId: env.KUBECONFIG_CRED, variable: 'KUBECONFIG_FILE')]) {
-            env.KUBECONFIG = "${KUBECONFIG_FILE}"
-            // Basic runtime verification: sample request (requires curlimage on agent or cluster access)
-            // Optional: run integration / health tests here.
-            // Cleanup old deployment (optional: keep for canary debugging)
-            if (env.OLD_COLOR && env.OLD_COLOR != '') {
-              echo "Deleting old deployment: ${DEPLOY_PREFIX}-${env.OLD_COLOR}"
-              sh "kubectl --kubeconfig=${env.KUBECONFIG} -n ${env.NAMESPACE} delete deployment ${DEPLOY_PREFIX}-${env.OLD_COLOR} --ignore-not-found"
-            }
-          }
         }
-      }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    GIT_COMMIT_HASH = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    IMAGE_TAG = "${REGISTRY}/${IMAGE_NAME}:${GIT_COMMIT_HASH}"
+                    echo "Building Docker image: ${IMAGE_TAG}"
+                    sh "docker build -t ${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh '''
+                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                        docker push ${IMAGE_TAG}
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes (Green)') {
+            steps {
+                script {
+                    echo "Deploying new image to GREEN environment"
+                    sh """
+                    sed 's|__IMAGE__|${IMAGE_TAG}|g' k8s/deployment-green.yaml | kubectl apply -f -
+                    kubectl rollout status deployment/${GREEN_DEPLOYMENT}
+                    """
+                }
+            }
+        }
+
+        stage('Health Check (Green)') {
+            steps {
+                script {
+                    echo "Performing health check on GREEN..."
+                    sh '''
+                    kubectl get pods -l version=green
+                    sleep 10
+                    '''
+                }
+            }
+        }
+
+        stage('Switch Traffic to Green') {
+            steps {
+                script {
+                    echo "Switching service traffic from BLUE → GREEN"
+                    sh """
+                    kubectl patch svc ${SERVICE_NAME} -p '{"spec":{"selector":{"app":"argon-web","version":"green"}}}'
+                    """
+                }
+            }
+        }
+
+        stage('Cleanup Old Blue') {
+            steps {
+                script {
+                    echo "Cleaning up old BLUE deployment..."
+                    sh "kubectl delete deployment ${BLUE_DEPLOYMENT} || true"
+                }
+            }
+        }
     }
 
-  } // stages
-
-  post {
-    success {
-      echo "✅ Blue/Green deployment finished. New color: ${env.NEW_COLOR}"
+    post {
+        success {
+            echo "🎉 Blue-Green Deployment Successful!"
+        }
+        failure {
+            echo "❌ Deployment Failed — Reverting traffic to BLUE"
+            sh """
+            kubectl patch svc ${SERVICE_NAME} -p '{"spec":{"selector":{"app":"argon-web","version":"blue"}}}'
+            """
+        }
     }
-    failure {
-      echo "❌ Pipeline failed. Manual inspection required."
-    }
-  }
 }
