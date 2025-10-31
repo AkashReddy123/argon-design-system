@@ -2,6 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: argon-green
+  labels:
+    app: argon-web
+    version: green
 spec:
   replicas: 1
   selector:
@@ -15,7 +18,8 @@ spec:
         version: green
     spec:
       containers:
-      - name: argon-web
-        image: balaakashreddyy/argon-web:green
-        ports:
-        - containerPort: 80
+        - name: argon-web
+          image: __IMAGE_PLACEHOLDER__
+          ports:
+            - containerPort: 80
+          imagePullPolicy: Always
