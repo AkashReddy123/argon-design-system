@@ -1,13 +1,15 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: argon-bluegreen-service
+  name: argon-service
+  labels:
+    app: argon-web
 spec:
   type: NodePort
+  ports:
+    - port: 8080           # Service port
+      targetPort: 8080     # Container port
+      nodePort: 32000      # External NodePort (accessible via minikube ip:32000)
   selector:
     app: argon-web
-    version: blue
-  ports:
-    - port: 80
-      targetPort: 80
-      nodePort: 31050
+    version: blue          # Initially points to blue (Jenkins switches this later)
