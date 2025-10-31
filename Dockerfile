@@ -8,7 +8,7 @@ WORKDIR /usr/share/nginx/html
 COPY . .
 
 # Expose default HTTP port
-EXPOSE 8080
+EXPOSE 80
 
 # Start Nginx
 CMD ["nginx", "-g", "daemon off;"]
