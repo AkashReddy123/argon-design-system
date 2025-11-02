@@ -2,9 +2,8 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_HUB_CREDENTIALS = 'dockerhub-credentials'
-        IMAGE_NAME = 'balaakashreddyy/argon-web'
-        K8S_NAMESPACE = 'default'
+        DOCKER_IMAGE = "argon-design-system"
+        DOCKERHUB_USER = "balaakashreddyy"
     }
 
     stages {
@@ -16,22 +15,21 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    sh '''
-                        echo "🔨 Building Docker image..."
-                        docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
-                    '''
-                }
+                bat '''
+                echo 🏗️ Building Docker image...
+                docker build -t %DOCKER_IMAGE% .
+                '''
             }
         }
 
         stage('Push to DockerHub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: "${DOCKER_HUB_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
-                    sh '''
-                        echo "📦 Pushing image to DockerHub..."
-                        echo $PASS | docker login -u $USER --password-stdin
-                        docker push ${IMAGE_NAME}:${BUILD_NUMBER}
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-login', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    bat '''
+                    echo 🔐 Logging into Docker Hub...
+                    docker login -u %DOCKER_USER% -p %DOCKER_PASS%
+                    docker tag %DOCKER_IMAGE% %DOCKER_USER%/%DOCKER_IMAGE%:latest
+                    docker push %DOCKER_USER%/%DOCKER_IMAGE%:latest
                     '''
                 }
             }
@@ -39,18 +37,12 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    sh '''
-                        echo "🚀 Deploying to Kubernetes using mounted kubeconfig..."
-                        export KUBECONFIG=/root/.kube/config
-
-                        echo "🔍 Checking cluster access..."
-                        kubectl config get-contexts
-
-                        echo "📂 Applying Kubernetes manifests..."
-                        kubectl apply -f k8s/ --validate=false --insecure-skip-tls-verify=true
-
-                        echo "✅ Deployment completed successfully!"
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
+                    bat '''
+                    set KUBECONFIG=%KUBECONFIG_FILE%
+                    echo 🚀 Deploying to Kubernetes...
+                    kubectl apply -f k8s/deployment.yaml
+                    kubectl apply -f k8s/service.yaml
                     '''
                 }
             }
@@ -59,10 +51,10 @@ pipeline {
 
     post {
         success {
-            echo '✅ Deployment successful!'
+            echo "✅ Pipeline executed successfully!"
         }
         failure {
-            echo '❌ Pipeline failed!'
+            echo "❌ Pipeline failed!"
         }
     }
 }
